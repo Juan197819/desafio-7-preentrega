@@ -1,13 +1,12 @@
 import express, { Router } from "express";
-import fs from "fs";
-import { isAsyncFunction } from "util/types";
+import guardar from "./persistencia.js";
 import productosLista from "./productos.js";
 
 const app = express()
 const routerProductos = Router(); 
 const routerCarrito = Router();  
 
-let administrador=false;
+let administrador=true;
 
 app.use('/api/productos', routerProductos)
 app.use('/api/carrito', routerCarrito)
@@ -17,15 +16,8 @@ routerProductos.use(express.urlencoded({ extended: true }));
 routerCarrito.use(express.json());
 routerCarrito.use(express.urlencoded({ extended: true }));
 
-const guardar= async (productosOrCarrito)=>{
-    try {
-        fs.promises.writeFile('./productos.txt', productosOrCarrito)
-    } catch (error) {
-        throw Error (`Este el codigo de error ${error}`)
-    }
-}
+//-----------MIDDLEWARE USUARIO----------
 
-let prod = productosLista; 
 const adminok= (req, res,next)=>{
     if (administrador) {
         console.log('Usuario Habilitado')
@@ -37,9 +29,9 @@ const adminok= (req, res,next)=>{
 }
 //--------------PRODUCTOS------------------
 
+let prod = productosLista; 
+
 routerProductos.get('/:id?', (req, res) => {
-    console.log('OK');
-    console.log("peticion GET");
     const id= req.params.id;
     let r;
     if (id) {
@@ -50,46 +42,58 @@ routerProductos.get('/:id?', (req, res) => {
     }
 })
 
-routerProductos.post('/',  adminok, (req, res) => {
-let producto = req.body
-producto.id = prod.length + 1 
-producto.timestamp= Date.now()
-prod.push(producto)
-guardar(prod)
-res.json(prod);
+routerProductos.post('/', adminok, (req, res) => {
+    let producto = req.body
+    producto.id = prod.length + 1 
+    producto.timestamp= Date.now()
+    prod.push(producto)
+    guardar('productos',prod)
+    res.json(prod); 
 })
 
 routerProductos.put('/:id', adminok, (req, res) => {
     const id = req.params.id;
-    let producto = req.body;
-    let nuevaLista = prod.filter(p=>p.id!=id)
-    console.log(nuevaLista);
-    producto.id=id
-    producto.timestamp = Date.now();
-    nuevaLista.push(producto);
-    function compare(a, b) { 
-        if (a.id < b.id) {
-            return -1;
+    let isExist = prod.find(p=>p.id==id)
+    if (isExist) {
+        prod = prod.filter(p=>p.id!=id)
+        let producto = req.body;
+        producto.id=id
+        producto.timestamp = Date.now();
+        prod.push(producto);
+        function compare(a, b) { 
+            if (a.id < b.id) {
+                return -1;
+            }
+            if (a.id > b.id) {  
+                return 1;
+            }
+            return 0;
         }
-        if (a.id > b.id) {  
-            return 1;
-        }
-        return 0;
+        prod.sort(compare);
+        guardar('productos', prod)
+        res.json(prod);
+    }else{
+        res.json('El producto que quiere modificar no existe');
     }
-    nuevaLista.sort(compare);
-    guardar(nuevaLista)
-    res.json(nuevaLista);
 })
 
 routerProductos.delete('/:id', adminok, (req, res) => {
     const id = req.params.id;
-    const listaModificada = prod.filter(p=>p.id!=id)
-    guardar(listaModificada)
-    res.json(listaModificada)
+    let isExist = prod.find(p=>p.id==id)
+    if (isExist) {
+        prod = prod.filter(p=>p.id!=id)
+        guardar('productos', prod)
+        res.json(prod) 
+    }else{
+        res.json('El producto que quiere eliminar no existe') 
+    }
 });
+        
+
 
 //--------------CARRITO------------------
-let carritos=[]
+
+let carritos=[] 
 
 routerCarrito.post('/', (req, res) => {
     const productoCarrito = {
@@ -98,29 +102,34 @@ routerCarrito.post('/', (req, res) => {
         productos: [],
     }
     carritos.push(productoCarrito)
-    console.log(carritos)
+    guardar('carritos', carritos)
     res.json(productoCarrito.id)
 }) 
 
 routerCarrito.delete('/:id', (req, res) => {
-    console.log("DELETE DESDE ACA PARA ABAJO")
     const id = req.params.id
+    let idExist;
     // 1ro VACIADO DE CARRITO
     carritos.forEach(carrito=>{
         if (carrito.id == id) {
+            idExist='ok'
             carrito.productos = []
         }
     })
     // 2do ELIMINACION DE CARRITO
-    const carritoModificado= carritos.filter(e=>e.id!=id)
-    res.json(carritoModificado)
+    carritos= carritos.filter(e=>e.id!=id)
+    guardar('carritos', carritos)
+    idExist? res.json(carritos):res.json('Id de carrito no encontrado')
 })
 
 routerCarrito.get('/:id/productos', (req, res) => {
     const id = req.params.id
     let carrito = carritos.find(el=>el.id==id)
     carrito?res.json(carrito.productos):res.json("Carrito Inexistente")
-})
+}) 
+routerCarrito.get('/', (req, res) => {
+   res.json(carritos)
+}) 
 
 routerCarrito.post('/:id/productos', (req, res) => {
     const id = req.params.id
@@ -130,6 +139,7 @@ routerCarrito.post('/:id/productos', (req, res) => {
         carritos.forEach(e=>{
             if (e.id==id) {
                 e.productos.push(producto)
+                guardar('carritos', carritos)
                 res.json(e)
             }
         })
@@ -146,12 +156,34 @@ routerCarrito.delete('/:id/productos/:id_prod', (req, res) => {
     carritos.forEach(carrito=>{
         if (carrito.id==id) {
             u=carrito.productos.find(e=>e.id==id_prod)
-            carrito.productos=carrito.productos.filter(prod=>prod.id!=id_prod)
-            console.log(carrito);
+            if (u) {
+                carrito.productos=carrito.productos.filter(prod=>prod.id!=id_prod);
+                guardar('carritos', carritos);
+            }else{
+                u='Producto Inexistente'
+            } 
         }
     })
     res.json(u)
 })
+
+//-------------RUTAS POR DEFAULT------------
+
+const errorRuta= {error: -2, descripcion: `ruta no implementada`}
+
+app.route('*')
+    .post((req,res)=>{
+        res.json(errorRuta)
+    })
+    .get((req,res)=>{
+        res.json(errorRuta)
+    })
+    .delete((req,res)=>{
+        res.json(errorRuta)
+    })
+    .put((req,res)=>{
+        res.json(errorRuta)
+    })
 
 const PORT = process.env.PORT || 8080
 
